@@ -3,9 +3,61 @@ name: Build ZMK firmware
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
 
 jobs:
+  validate-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate build.yaml exists
+        run: |
+          set -e
+          test -f build.yaml
+          echo "build.yaml present"
+
+      - name: Validate required config files
+        run: |
+          set -e
+          python3 - <<'PY'
+          import yaml, sys
+          from pathlib import Path
+
+          p = Path("build.yaml")
+          data = yaml.safe_load(p.read_text()) or {}
+          entries = data.get("include", [])
+
+          if not entries:
+              raise SystemExit("No build entries found in build.yaml")
+
+          for item in entries:
+              shield = item.get("shield")
+              if shield:
+                  required = [
+                      Path("config") / f"{shield}.conf",
+                      Path("config") / f"{shield}.keymap",
+                  ]
+                  missing = [str(x) for x in required if not x.exists()]
+                  if missing:
+                      raise SystemExit(f"Missing config for shield {shield}: {missing}")
+
+          print("Config validation passed")
+          PY
+
   build:
-    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@main
+    needs: validate-config
+    uses: zmkfirmware/zmk/.github/workflows/build-user-config.yml@<pin-to-commit-or-tag>
+    # if the upstream workflow supports inputs, pass them here; otherwise keep this minimal
+
+  debug-on-failure:
+    needs: build
+    if: ${{ always() && needs.build.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print debug info
+        run: |
+          echo "Build failed"
+          echo "Check the upstream job logs and generated build artifacts"
+          echo "If needed, rerun with a pinned SHA or inspect the config matrix"
